@@ -5,6 +5,7 @@ package org.jetbrains.kotlin.fir.testGenerator
 import org.jetbrains.fir.uast.test.*
 import org.jetbrains.kotlin.fir.testGenerator.codeinsight.generateK2CodeInsightTests
 import org.jetbrains.kotlin.idea.fir.actions.AbstractK2AddImportActionTest
+import org.jetbrains.kotlin.idea.fir.actions.AbstractK2BytecodeToolWindowTest
 import org.jetbrains.kotlin.idea.fir.analysis.providers.AbstractIdeKotlinAnnotationsResolverTest
 import org.jetbrains.kotlin.idea.fir.analysis.providers.sessions.AbstractSessionsInvalidationTest
 import org.jetbrains.kotlin.idea.fir.analysis.providers.trackers.AbstractProjectWideOutOfBlockKotlinModificationTrackerTest
@@ -199,6 +200,10 @@ private fun assembleWorkspace(): TWorkspace = workspace {
         testClass<AbstractFirJvmOptimizeImportsTest> {
             model("editor/optimizeImports/jvm", pattern = KT_WITHOUT_DOTS)
             model("editor/optimizeImports/common", pattern = KT_WITHOUT_DOTS)
+        }
+
+        testClass<AbstractK2BytecodeToolWindowTest> {
+            model("internal/toolWindow", isRecursive = false, pattern = DIRECTORY, testMethodName = "doTestWithIr")
         }
     }
 

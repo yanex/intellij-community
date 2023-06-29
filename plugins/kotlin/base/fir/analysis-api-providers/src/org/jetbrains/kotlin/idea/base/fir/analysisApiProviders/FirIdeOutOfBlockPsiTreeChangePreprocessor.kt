@@ -12,6 +12,7 @@ import org.jetbrains.kotlin.analysis.low.level.api.fir.element.builder.getNonLoc
 import org.jetbrains.kotlin.analysis.low.level.api.fir.file.structure.isReanalyzableContainer
 import org.jetbrains.kotlin.idea.KotlinLanguage
 import org.jetbrains.kotlin.idea.base.util.module
+import org.jetbrains.kotlin.psi.KtCodeFragment
 
 internal class FirIdeOutOfBlockPsiTreeChangePreprocessor(private val project: Project) : PsiTreeChangePreprocessor {
     override fun treeChanged(event: PsiTreeChangeEventImpl) {
@@ -76,7 +77,9 @@ internal class FirIdeOutOfBlockPsiTreeChangePreprocessor(private val project: Pr
             return false
         }
 
-        val container = psi.getNonLocalContainingInBodyDeclarationWith() ?: return true
+        val container = psi.getNonLocalContainingInBodyDeclarationWith()
+            ?: return psi.containingFile !is KtCodeFragment
+
         return !isReanalyzableContainer(container)
     }
 

@@ -1,0 +1,8 @@
+<!-- Copyright 2000-2023 JetBrains s.r.o. and contributors. Use of this source code is governed by the Apache 2.0 license. -->
+<idea-plugin>
+  <actions>
+    <action id="ShowKotlinBytecode" class="org.jetbrains.kotlin.idea.actions.ShowKotlinBytecodeAction">
+      <add-to-group group-id="KotlinToolsGroup"/>
+    </action>
+  </actions>
+</idea-plugin>

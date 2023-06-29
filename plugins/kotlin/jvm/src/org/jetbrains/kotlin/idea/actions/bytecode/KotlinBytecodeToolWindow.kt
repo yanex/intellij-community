@@ -6,6 +6,7 @@ import com.intellij.ide.highlighter.JavaFileType
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.diagnostic.Logger
+import com.intellij.openapi.diagnostic.getOrLogException
 import com.intellij.openapi.editor.EditorFactory
 import com.intellij.openapi.editor.ScrollType
 import com.intellij.openapi.fileEditor.FileEditorManager
@@ -23,15 +24,13 @@ import com.intellij.util.ui.JBUI
 import org.jetbrains.annotations.ApiStatus
 import org.jetbrains.kotlin.backend.common.output.OutputFile
 import org.jetbrains.kotlin.codegen.ClassBuilderFactories
-import org.jetbrains.kotlin.codegen.state.GenerationState
 import org.jetbrains.kotlin.config.*
 import org.jetbrains.kotlin.idea.KotlinJvmBundle
+import org.jetbrains.kotlin.idea.base.codeInsight.compiler.*
 import org.jetbrains.kotlin.idea.base.projectStructure.RootKindFilter
 import org.jetbrains.kotlin.idea.base.projectStructure.languageVersionSettings
 import org.jetbrains.kotlin.idea.base.projectStructure.matches
 import org.jetbrains.kotlin.idea.base.util.module
-import org.jetbrains.kotlin.idea.core.ClassFileOrigins
-import org.jetbrains.kotlin.idea.core.KotlinCompilerIde
 import org.jetbrains.kotlin.idea.internal.DecompileFailedException
 import org.jetbrains.kotlin.idea.internal.KotlinJvmDecompilerFacade
 import org.jetbrains.kotlin.idea.util.LongRunningReadTask
@@ -278,7 +277,7 @@ class KotlinBytecodeToolWindow(
                 "*/"
 
         fun getBytecodeForFile(ktFile: KtFile, configuration: CompilerConfiguration): BytecodeGenerationResult {
-            val (state, classFileOrigins) = try {
+            val (result, classFileOrigins) = try {
                 compileSingleFile(ktFile, configuration)
                     ?: return BytecodeGenerationResult.Error(KotlinJvmBundle.message("cannot.compile.0.to.bytecode", ktFile.name))
             } catch (e: ProcessCanceledException) {
@@ -289,22 +288,22 @@ class KotlinBytecodeToolWindow(
 
             val answer = StringBuilder()
 
-            val diagnostics = state.collectedExtraJvmDiagnostics.all()
-            if (!diagnostics.isEmpty()) {
+            val diagnostics = result.diagnostics
+            if (diagnostics.isNotEmpty()) {
                 answer.append("// Backend Errors: \n")
                 answer.append("// ================\n")
                 for (diagnostic in diagnostics) {
                     answer.append("// Error at ")
-                        .append(diagnostic.psiFile.name)
+                        .append(diagnostic.psiElement.containingFile.name)
                         .append(join(diagnostic.textRanges, ","))
                         .append(": ")
-                        .append(DefaultErrorMessages.render(diagnostic))
+                        .append(diagnostic.factory.ktRenderer.render(diagnostic))
                         .append("\n")
                 }
                 answer.append("// ================\n\n")
             }
 
-            for (outputFile in getRelevantOutputFiles(state, classFileOrigins, ktFile)) {
+            for (outputFile in getRelevantOutputFiles(result, classFileOrigins, ktFile)) {
                 answer.append("// ================")
                 answer.append(outputFile.relativePath)
                 answer.append(" =================\n")
@@ -315,7 +314,7 @@ class KotlinBytecodeToolWindow(
         }
 
         /**
-         * Returns a list of output files from [state] that should be shown to the user.
+         * Returns a list of output files from the [result] that should be shown to the user.
          *
          * An [OutputFile] is linked to its source [KtFile] via [OutputFile.sourceFiles]. However, all source files are physical, while a
          * [KtFile] might not necessarily be physical. As a fallback for non-physical [KtFile]s, [classFileOrigins] are instead used to map
@@ -324,22 +323,22 @@ class KotlinBytecodeToolWindow(
          *
          * If this approach for some reason filters out all output files, the full list is returned defensively.
          */
-        private fun getRelevantOutputFiles(state: GenerationState, classFileOrigins: ClassFileOrigins, ktFile: KtFile): List<OutputFile> {
+        private fun getRelevantOutputFiles(result: CompilationResult, classFileOrigins: ClassFileOrigins, ktFile: KtFile): List<OutputFile> {
             val sourceFile = File(ktFile.virtualFile.path)
-            val outputFiles = state.factory.asList()
+            val outputFiles = result.outputFiles
             return outputFiles.filter { outputFile ->
                 outputFile.sourceFiles.any { it == sourceFile } || classFileOrigins[outputFile.relativePath]?.contains(ktFile) == true
             }.ifEmpty { outputFiles }
         }
 
         @ApiStatus.Internal
-        fun compileSingleFile(ktFile: KtFile, initialConfiguration: CompilerConfiguration): Pair<GenerationState, ClassFileOrigins>? =
-            KotlinCompilerIde(
-                ktFile,
-                initialConfiguration,
-                ClassBuilderFactories.TEST,
-                shouldStubUnboundIrSymbols = true,
-            ).compileTracingOrigin()
+        fun compileSingleFile(ktFile: KtFile, configuration: CompilerConfiguration): Pair<CompilationResult, ClassFileOrigins>? {
+            val builderFactory = OriginTracingClassBuilderFactory(ClassBuilderFactories.TEST)
+            val options = CompilationOptions(ktFile, configuration, builderFactory, stubUnboundIrSymbols = true)
+
+            val result = KotlinCompilerIde.getInstance().compile(options)
+            return result.getOrLogException(LOG)?.let { Pair(it, builderFactory.classFileOrigins) }
+        }
 
         private fun mapLines(text: String, startLine: Int, endLine: Int): Pair<Int, Int> {
             @Suppress("NAME_SHADOWING")

@@ -22,6 +22,10 @@
     </actions>
 
     <extensions defaultExtensionNs="com.intellij">
+        <applicationService
+                serviceInterface="org.jetbrains.kotlin.idea.base.codeInsight.compiler.KotlinCompilerIde"
+                serviceImplementation="org.jetbrains.kotlin.idea.base.fe10.codeInsight.compiler.K1KotlinCompilerIde"/>
+
         <projectService serviceInterface="org.jetbrains.kotlin.console.KotlinConsoleKeeper"
                         serviceImplementation="org.jetbrains.kotlin.console.KotlinConsoleKeeper"/>
 

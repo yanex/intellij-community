@@ -4,7 +4,6 @@ package org.jetbrains.kotlin.idea.jvmDecompiler
 import com.intellij.openapi.application.runReadAction
 import com.intellij.openapi.fileTypes.StdFileTypes
 import com.intellij.openapi.util.io.FileUtil
-import com.intellij.openapi.util.io.FileUtilRt
 import com.intellij.openapi.vfs.VirtualFile
 import org.jetbrains.java.decompiler.IdeaLogger
 import org.jetbrains.java.decompiler.main.decompiler.BaseDecompiler
@@ -69,12 +68,15 @@ internal object KotlinBytecodeDecompiler {
         val configuration = CompilerConfiguration().apply {
             languageVersionSettings = file.languageVersionSettings
         }
-        val generationState = KotlinBytecodeToolWindow.compileSingleFile(file, configuration)?.first ?: return emptyMap()
+        val result = KotlinBytecodeToolWindow.compileSingleFile(file, configuration)?.first ?: return emptyMap()
 
         val bytecodeMap = hashMapOf<File, () -> ByteArray>()
-        generationState.factory.asList().filter { FileUtilRt.extensionEquals(it.relativePath, "class") }.forEach {
-            bytecodeMap[File("/${it.relativePath}").absoluteFile] = { it.asByteArray() }
+        for (outputFile in result.outputFiles) {
+            if (outputFile.relativePath.endsWith(".class")) {
+                bytecodeMap[File("/${outputFile.relativePath}").absoluteFile] = { outputFile.asByteArray() }
+            }
         }
+
         return bytecodeMap
     }
 

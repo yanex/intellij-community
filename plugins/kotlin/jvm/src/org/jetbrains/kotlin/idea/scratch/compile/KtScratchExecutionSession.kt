@@ -10,6 +10,7 @@ import com.intellij.execution.target.TargetedCommandLine
 import com.intellij.execution.target.local.LocalTargetEnvironmentRequest
 import com.intellij.openapi.application.runReadAction
 import com.intellij.openapi.diagnostic.ControlFlowException
+import com.intellij.openapi.diagnostic.getOrLogException
 import com.intellij.openapi.module.Module
 import com.intellij.openapi.progress.ProgressIndicator
 import com.intellij.openapi.progress.Task
@@ -19,7 +20,9 @@ import com.intellij.openapi.util.Computable
 import com.intellij.openapi.util.NlsContexts
 import com.intellij.openapi.util.io.FileUtil
 import org.jetbrains.kotlin.idea.KotlinJvmBundle
-import org.jetbrains.kotlin.idea.core.KotlinCompilerIde
+import org.jetbrains.kotlin.idea.base.codeInsight.compiler.CompilationOptions
+import org.jetbrains.kotlin.idea.base.codeInsight.compiler.KotlinCompilerIde
+import org.jetbrains.kotlin.idea.base.codeInsight.compiler.compileToDirectory
 import org.jetbrains.kotlin.idea.core.script.ScriptConfigurationManager
 import org.jetbrains.kotlin.idea.scratch.LOG
 import org.jetbrains.kotlin.idea.scratch.ScratchExpression
@@ -145,7 +148,16 @@ class KtScratchExecutionSession(
         val tmpDir = FileUtil.createTempDirectory("compile", "scratch")
         LOG.printDebugMessage("Temp output dir: ${tmpDir.path}")
 
-        KotlinCompilerIde(psiFile).compileToDirectory(tmpDir)
+        val compilationOptions = CompilationOptions(psiFile)
+
+        val result = KotlinCompilerIde.getInstance().compileToDirectory(compilationOptions, tmpDir)
+            .getOrLogException(LOG)
+            ?: return null
+
+        if (result.diagnostics.isNotEmpty()) {
+            LOG.warn("Errors found on analyzing the scratch file. Compilation aborted")
+        }
+
         return tmpDir
     }
 

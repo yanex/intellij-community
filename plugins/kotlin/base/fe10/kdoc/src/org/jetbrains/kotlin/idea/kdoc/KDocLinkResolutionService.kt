@@ -14,3 +14,14 @@ interface KDocLinkResolutionService {
         qualifiedName: List<String>
     ): Collection<DeclarationDescriptor>
 }
+
+internal class EmptyKDocLinkResolutionService : KDocLinkResolutionService {
+    override fun resolveKDocLink(
+        context: BindingContext,
+        fromDescriptor: DeclarationDescriptor,
+        resolutionFacade: ResolutionFacade,
+        qualifiedName: List<String>
+    ): Collection<DeclarationDescriptor> {
+        return emptyList()
+    }
+}

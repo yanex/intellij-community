@@ -42,8 +42,6 @@ import org.jetbrains.kotlin.storage.LockBasedStorageManager
 import org.jetbrains.kotlin.types.*
 import org.jetbrains.kotlin.utils.Printer
 
-class CodeFragmentCodegenException(val reason: Exception) : Exception()
-
 class CodeFragmentCompiler(private val executionContext: ExecutionContext) {
 
     companion object {

@@ -289,7 +289,7 @@ class KotlinPositionManager(private val debugProcess: DebugProcess) : MultiReque
     private fun getElementForDeclarationLine(location: Location, file: KtFile, lineNumber: Int): KtElement? {
         val lineStartOffset = file.getLineStartOffset(lineNumber) ?: return null
         val elementAt = file.findElementAt(lineStartOffset)
-        val contextElement = getContextElement(elementAt)
+        val contextElement = CodeFragmentContextTuner.getInstance().tuneContextElement(elementAt, location)
 
         if (contextElement !is KtClass) return null
 

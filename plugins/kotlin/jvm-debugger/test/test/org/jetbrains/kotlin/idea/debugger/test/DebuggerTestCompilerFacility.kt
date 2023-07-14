@@ -15,19 +15,27 @@ import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.openapi.vfs.newvfs.ArchiveFileSystem
 import com.intellij.psi.PsiManager
+import com.intellij.util.containers.addIfNotNull
+import org.jetbrains.kotlin.analysis.api.analyze
 import org.jetbrains.kotlin.analyzer.AnalysisResult
 import org.jetbrains.kotlin.caches.resolve.KotlinCacheService
-import org.jetbrains.kotlin.cli.jvm.compiler.findMainClass
 import org.jetbrains.kotlin.config.*
+import org.jetbrains.kotlin.fileClasses.JvmFileClassUtil
+import org.jetbrains.kotlin.idea.base.codeInsight.KotlinMainFunctionDetector
 import org.jetbrains.kotlin.idea.base.plugin.artifacts.TestKotlinArtifacts
+import org.jetbrains.kotlin.idea.base.psi.classIdIfNonLocal
 import org.jetbrains.kotlin.idea.codegen.CodegenTestUtil
-import org.jetbrains.kotlin.idea.resolve.ResolutionFacade
 import org.jetbrains.kotlin.idea.resolve.languageVersionSettings
 import org.jetbrains.kotlin.idea.test.KotlinBaseTest.TestFile
 import org.jetbrains.kotlin.idea.test.KotlinCompilerStandalone
 import org.jetbrains.kotlin.idea.test.testFramework.KtUsefulTestCase
+import org.jetbrains.kotlin.load.kotlin.internalName
+import org.jetbrains.kotlin.name.ClassId
 import org.jetbrains.kotlin.platform.jvm.JvmPlatforms
 import org.jetbrains.kotlin.psi.KtFile
+import org.jetbrains.kotlin.psi.KtNamedFunction
+import org.jetbrains.kotlin.psi.KtTreeVisitorVoid
+import org.jetbrains.kotlin.psi.psiUtil.containingClassOrObject
 import java.io.File
 
 data class TestCompileConfiguration(
@@ -213,15 +221,6 @@ open class DebuggerTestCompilerFacility(
             }
             analysisResult.throwIfError()
             resolutionFacade.languageVersionSettings to analysisResult
-        }
-    }
-
-    // Returns the qualified name of the main test class.
-    fun analyzeAndFindMainClass(jvmKtFiles: List<KtFile>): String {
-        return runReadAction {
-            val (languageVersionSettings, analysisResult) = analyzeSources(jvmKtFiles)
-            findMainClass(analysisResult.bindingContext, languageVersionSettings, jvmKtFiles)?.asString()
-                ?: error("Cannot find main class name")
         }
     }
 

@@ -2,9 +2,11 @@
 package org.jetbrains.kotlin.idea.fir.extensions
 
 import com.intellij.ide.impl.isTrusted
+import com.intellij.ide.plugins.PluginManager
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.diagnostic.logger
 import com.intellij.openapi.diagnostic.runAndLogException
+import com.intellij.openapi.extensions.PluginId
 import com.intellij.openapi.module.Module
 import com.intellij.openapi.module.ModuleManager
 import com.intellij.openapi.progress.ProcessCanceledException
@@ -23,6 +25,8 @@ import com.intellij.platform.workspace.jps.entities.FacetEntity
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import org.jetbrains.kotlin.analysis.project.structure.KtCompilerPluginsProvider
+import org.jetbrains.kotlin.analysis.project.structure.KtLibraryModule
+import org.jetbrains.kotlin.analysis.project.structure.KtModule
 import org.jetbrains.kotlin.analysis.project.structure.KtSourceModule
 import org.jetbrains.kotlin.cli.common.arguments.CommonCompilerArguments
 import org.jetbrains.kotlin.cli.common.arguments.K2JVMCompilerArguments
@@ -30,6 +34,7 @@ import org.jetbrains.kotlin.cli.plugins.processCompilerPluginsOptions
 import org.jetbrains.kotlin.compiler.plugin.CommandLineProcessor
 import org.jetbrains.kotlin.compiler.plugin.CompilerPluginRegistrar
 import org.jetbrains.kotlin.compiler.plugin.ExperimentalCompilerApi
+import org.jetbrains.kotlin.config.CommonConfigurationKeys
 import org.jetbrains.kotlin.config.CompilerConfiguration
 import org.jetbrains.kotlin.config.JVMConfigurationKeys
 import org.jetbrains.kotlin.config.JvmTarget
@@ -46,11 +51,14 @@ import org.jetbrains.kotlin.idea.compiler.configuration.KotlinCompilerSettingsLi
 import org.jetbrains.kotlin.idea.facet.KotlinFacet
 import org.jetbrains.kotlin.idea.facet.KotlinFacetType
 import org.jetbrains.kotlin.util.ServiceLoaderLite
+import org.jetbrains.kotlin.utils.addToStdlib.safeAs
 import java.io.File
 import java.nio.file.Path
 import java.util.*
 import java.util.concurrent.ConcurrentMap
+import kotlin.io.path.*
 
+private data class CompilerExtensionPathToConfiguration(val path:Path, val compilerConfiguration: CompilerConfiguration? = null)
 @OptIn(ExperimentalCompilerApi::class)
 internal class KtCompilerPluginsProviderIdeImpl(private val project: Project, cs: CoroutineScope) : KtCompilerPluginsProvider(), Disposable {
     private val pluginsCacheCachedValue: SynchronizedClearableLazy<PluginsCache?> = SynchronizedClearableLazy { createNewCache() }
@@ -105,32 +113,75 @@ internal class KtCompilerPluginsProviderIdeImpl(private val project: Project, cs
         val pluginsClassLoader: UrlClassLoader = UrlClassLoader.build().apply {
             parent(KtSourceModule::class.java.classLoader)
             val pluginsClasspath = ModuleManager.getInstance(project).modules
-                .flatMap { it.getCompilerArguments().getSubstitutedPluginClassPaths() }
+                .flatMap { it.getCompilerArguments().getSubstitutedPluginClassPaths().map { it.path } }
                 .distinct()
             files(pluginsClasspath)
         }.get()
         return PluginsCache(
             pluginsClassLoader,
-            ContainerUtil.createConcurrentWeakMap<KtSourceModule, Optional<CompilerPluginRegistrar.ExtensionStorage>>()
+            ContainerUtil.createConcurrentWeakMap<KtModule, Optional<CompilerPluginRegistrar.ExtensionStorage>>()
         )
     }
 
     private class PluginsCache(
         val pluginsClassLoader: UrlClassLoader,
-        val registrarForModule: ConcurrentMap<KtSourceModule, Optional<CompilerPluginRegistrar.ExtensionStorage>>
+        val registrarForModule: ConcurrentMap<KtModule, Optional<CompilerPluginRegistrar.ExtensionStorage>>
     )
 
-    override fun <T : Any> getRegisteredExtensions(module: KtSourceModule, extensionType: ProjectExtensionDescriptor<T>): List<T> {
+    override fun <T : Any> getRegisteredExtensions(module: KtModule, extensionType: ProjectExtensionDescriptor<T>): List<T> {
         val registrarForModule = pluginsCache?.registrarForModule ?: return emptyList()
         val extensionStorage = registrarForModule.computeIfAbsent(module) {
-            Optional.ofNullable(computeExtensionStorage(module))
+            Optional.ofNullable(when (it) {
+                is KtSourceModule -> computeExtensionStorage(it)
+                is KtLibraryModule -> computeExtensionLibraryStorage(it)
+                else -> null
+
+            })
         }.orNull() ?: return emptyList()
         val registrars = extensionStorage.registeredExtensions[extensionType] ?: return emptyList()
         @Suppress("UNCHECKED_CAST")
         return registrars as List<T>
     }
 
-    override fun isPluginOfTypeRegistered(module: KtSourceModule, pluginType: CompilerPluginType): Boolean {
+    private fun computeExtensionLibraryStorage(module: KtLibraryModule): CompilerPluginRegistrar.ExtensionStorage? {
+
+        val (classpath, configuration) = CompilerPluginExtension.EP_NAME.extensions
+          .asSequence()
+          .mapNotNull { ext ->
+              ext.pluginClassPath(module)?.let { it to ext.configuration() }
+          }.firstOrNull() ?: return null
+        val classLoader = pluginsCache?.pluginsClassLoader ?: return null
+        val logger = logger<KtCompilerPluginsProviderIdeImpl>()
+        val pluginRegistrars =
+          logger.runAndLogException {
+              ServiceLoaderLite.loadImplementations<CompilerPluginRegistrar>(
+                listOf(classpath.toFile()), classLoader)
+          }
+            ?.takeIf { it.isNotEmpty() }
+          ?: return null
+
+        val storage = CompilerPluginRegistrar.ExtensionStorage()
+        for (pluginRegistrar in pluginRegistrars) {
+            with(pluginRegistrar) {
+                try {
+                    val appliedConfiguration = configuration?: CompilerConfiguration()
+                    storage.registerExtensions(appliedConfiguration.apply {
+                        putIfAbsent(JVMConfigurationKeys.IR, true)
+                        putIfAbsent(CommonConfigurationKeys.USE_FIR, true)
+                    })
+                }
+                catch (e: ProcessCanceledException) {
+                    throw e
+                }
+                catch (e: Throwable) {
+                    LOG.error(e)
+                }
+            }
+        }
+        return storage
+    }
+
+    override fun isPluginOfTypeRegistered(module: KtModule, pluginType: CompilerPluginType): Boolean {
         val extension = when (pluginType) {
             CompilerPluginType.ASSIGNMENT -> FirAssignExpressionAltererExtension::class
             else -> return false
@@ -145,7 +196,9 @@ internal class KtCompilerPluginsProviderIdeImpl(private val project: Project, cs
     private fun computeExtensionStorage(module: KtSourceModule): CompilerPluginRegistrar.ExtensionStorage? {
         val classLoader = pluginsCache?.pluginsClassLoader ?: return null
         val compilerArguments = module.ideaModule.getCompilerArguments()
-        val classPaths = compilerArguments.getSubstitutedPluginClassPaths().map { it.toFile() }.takeIf { it.isNotEmpty() } ?: return null
+        val (classPaths, configurations) = compilerArguments.getSubstitutedPluginClassPaths().map {
+            it.path.toFile() to it.compilerConfiguration
+        }.unzip().takeIf { it.first.isNotEmpty() } ?: return null
 
         val logger = logger<KtCompilerPluginsProviderIdeImpl>()
 
@@ -170,16 +223,21 @@ internal class KtCompilerPluginsProviderIdeImpl(private val project: Project, cs
                 putIfNotNull(JVMConfigurationKeys.JVM_TARGET, compilerArguments.jvmTarget?.let(JvmTarget::fromString))
                 putIfNotNull(JVMConfigurationKeys.OUTPUT_DIRECTORY, outputUrl?.let { File(it) })
                 put(JVMConfigurationKeys.IR, true) // FIR cannot work with the old backend
+                put(CommonConfigurationKeys.USE_FIR, true)
             }
 
             processCompilerPluginsOptions(this, compilerArguments.pluginOptions?.toList(), commandLineProcessors)
         }
 
         val storage = CompilerPluginRegistrar.ExtensionStorage()
-        for (pluginRegistrar in pluginRegistrars) {
+        pluginRegistrars.forEachIndexed { index, pluginRegistrar ->
             with(pluginRegistrar) {
                 try {
-                    storage.registerExtensions(compilerConfiguration)
+                    val appliedConfiguration = configurations[index]?.apply {
+                        putIfAbsent(JVMConfigurationKeys.IR, true) // FIR cannot work with the old backend
+                        putIfAbsent(CommonConfigurationKeys.USE_FIR, true)
+                    } ?: compilerConfiguration
+                    storage.registerExtensions(appliedConfiguration)
                 }
                 catch (e : ProcessCanceledException) {
                     throw e
@@ -200,7 +258,7 @@ internal class KtCompilerPluginsProviderIdeImpl(private val project: Project, cs
             .orEmpty()
     }
 
-    private fun CommonCompilerArguments.getSubstitutedPluginClassPaths(): List<Path> {
+    private fun CommonCompilerArguments.getSubstitutedPluginClassPaths(): List<CompilerExtensionPathToConfiguration> {
         val userDefinedPlugins = getOriginalPluginClassPaths()
         return userDefinedPlugins.mapNotNull(::substitutePluginJar)
     }
@@ -210,11 +268,14 @@ internal class KtCompilerPluginsProviderIdeImpl(private val project: Project, cs
      * 1. Always replace our own plugins (like "allopen", "noarg", etc.) with bundled ones to avoid binary incompatibility.
      * 2. Allow to use other compiler plugins only if [onlyBundledPluginsEnabled] is set to false; otherwise, filter them.
      */
-    private fun substitutePluginJar(userSuppliedPluginJar: Path): Path? {
+    private fun substitutePluginJar(userSuppliedPluginJar: Path): CompilerExtensionPathToConfiguration? {
         val bundledPlugin = KotlinK2BundledCompilerPlugins.findCorrespondingBundledPlugin(userSuppliedPluginJar)
-        if (bundledPlugin != null) return bundledPlugin.bundledJarLocation
+        if (bundledPlugin != null) return CompilerExtensionPathToConfiguration(bundledPlugin.bundledJarLocation)
 
-        return userSuppliedPluginJar.takeUnless { onlyBundledPluginsEnabled }
+        return CompilerPluginExtension.EP_NAME.extensions.asSequence().mapNotNull{ pluginExt ->
+            pluginExt.pluginClassPath(userSuppliedPluginJar)
+              ?.let { CompilerExtensionPathToConfiguration(it, pluginExt.configuration()) }
+        }.firstOrNull() ?: CompilerExtensionPathToConfiguration(userSuppliedPluginJar).takeUnless { onlyBundledPluginsEnabled }
     }
 
 
